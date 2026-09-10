@@ -9,16 +9,42 @@ files and methods, not adjectives.
 
 Describe the system as the code actually builds it.
 
-**Data model.** What is a booking, in the code? What types hold it, and what has to stay
-in agreement for a booking to make sense?
+**Data model.** The booking is consisted of room id, date, start time, end time and user who make the booking. There are two HashMap in InMemoryStore holding it: slotsByRoomDate(Map<String, List<long[]>>), keyed by room and date, holding all slots; bookerBySlot(Map<String, String>), keyed by room, date, start time and end time, holding the user who made the booking. 
+There are some requirements: 
+- start time should be less than end time, checked by the caller
+- two maps should be updated together
+- overlap time is not allowed for the same room booking
 
-**Operations.** What can a caller do, and what goes in and out?
+**Operations.** 
+The caller interacts with RequestHandler through four public functions as following:
+- createBooking(room, date, start, end, user): All the inputs are **String**, output value is also **String** -> This function is for making a new booking
+- cancelBooking(room, date, start, end): inputs are String type and output is also String type -> The function is used to cancel the existing booking
+- rescheduleBooking(room, date, oldStart, oldEnd, newStart, newEnd): inputs are String type and output is also String type -> The function is for moving the existing booking to another slots
+- listBookings(room, date): inputs are String type and output is also String type -> The functions is for listing all booking for the room at the date.
 
 **Structure.** What classes exist, what does each own, and who holds a reference to whom?
+- class BookingPolicy: own the business rules and their thresholds
+- class InMemoryStore: owns the data model - two Maps
+- class RequestHandler: owns implementation of requesting parsing, overlap checking, and format checking
+- class ReservationApp: own main function, driving a demo script
+References:
+- RequestHandler  -> InMemoryStore  (creates one instance, delegates storage to it)
+- ReservationApp  -> RequestHandler (creates one instance, calls its methods)
 
-**The no-double-booking invariant.** Where is it enforced? Name every place a check
-happens, say what each one actually checks, and trace one reschedule request through the
-code from the entry point to storage.
+**The no-double-booking invariant.** 
+It is enforced in:
+- RequestHandler.createBooking line 30-36: checked all slots for overlapping before calling addSlot
+- InMemoryStore.addSlot line 24-28: check the completely same slots and not check partially overlapping
+- BookingPolicy.validate() line 29-33: defines the rule by using overlaps
+For reschedule request:
+1. Input information including room, date, old time and new time
+2. Check all time format and convert them into long type
+3. Check end time is greater then start time
+4. Find the user who made the old booking
+5. Remove the old slot from two Maps
+6. Add the new slot in two Maps and return boolean value
+7. Return String with 'OK'
+
 
 ---
 
