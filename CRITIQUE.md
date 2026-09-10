@@ -54,21 +54,31 @@ Two problems. For each one, fill in all three parts.
 
 ### Problem 1
 
-**The problem.** Name it, using the vocabulary from lecture (milestone 2 in the
-handout names the three).
+**The problem.** There is no class for 'booking' which is represented as different variables - **Representational Gap**
 
-**Where in the code.** File and method.
+**Where in the code.** 
+Primarily **InMemoryStore.java** — there are two fields slotsByRoomDate (Map<String, List<long[]>>) and bookerBySlot (Map<String, String>), and every method that reads/writes them.
+It also shows up in **RequestHandler.java** — every method takes a booking's fields as separate String parameters instead of one object.
 
-**What it makes expensive.** A concrete future change, or something that already goes
-wrong today. What breaks first?
+**What it makes expensive.** 
+**Concrete future change:** adding a new field to a booking, like a booking id, a purpose/note, is not a one-place edit. Because there's no Booking class to add a field to, it requires touching every layer that currently reconstructs "a booking"：
+- Every RequestHandler method that creates or returns a booking grows another parameter
+- Every place that builds the "room|date|start|end" key has to be touched consistently
+- InMemoryStore needs a third parallel map (or a restructured value type) keyed by the same string convention, kept in sync with the other two by hand
+
+What **"breaks first"** is consistency between the maps: nothing enforces that all maps get updated together, so a change is easy to apply to slotsByRoomDate and forget in bookerBySlot (or the other new map), producing orphaned entries with no compiler error to catch it.
 
 ### Problem 2
 
-**The problem.**
+**The problem.** The validation responsibility should belong to `BookingPolicy`, but it was implemented by `RequestHandler`. - **Misplaced Responsibility**
 
 **Where in the code.**
+**BookingPolicy.java** — the entire class is defined but never referenced by any other class in the codebase. RequestHandler.createBooking, lines 30-36 — reimplements a narrower, inline version of the same overlap check instead of delegating to **BookingPolicy.validate()**.
 
 **What it makes expensive.**
+Something already goes wrong today: BookingPolicy encodes two rules that createBooking never checks at all — business hours (08:00–20:00) and max booking length (4 hours). Since nothing calls BookingPolicy, a call like handler.createBooking(room, date, "22:00", "23:00", "user") succeeds and returns "OK", even though it violates both rules the code claims to enforce.
+
+It also creates a maintenance trap going forward: if a developer wants to change a business rule (e.g. extend the max length to 6 hours), the obvious place to edit is BookingPolicy — but that edit has zero effect on actual behavior. The system ends up with two competing definitions of "is this booking valid" — one real but incomplete (inline in RequestHandler), one complete but dead (BookingPolicy) — and every future change risks widening the gap between them instead of closing it.
 
 ---
 
