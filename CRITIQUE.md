@@ -84,24 +84,43 @@ It also creates a maintenance trap going forward: if a developer wants to change
 
 ## Milestone 3: Two alternative decompositions
 
-Two different ways to carve up this system. A different split of responsibility, not a
-list of local code fixes. Read the handout's appendix before writing this section.
-
 ### Alternative A
 
-**The decomposition.** What are the pieces, what does each own, and where do the rules
-live?
+**The decomposition.** 
 
-**One tradeoff.** Something this option actually costs. "No real downside" is not a
-tradeoff.
+Split RequestHandler's four operations into four owners instead of one class doing everything:
+
+- **BookingCreation** — owns creating a booking end-to-end: parses the request, calls the shared BookingPolicy (business hours, max length, overlap) before writing, commits to storage.
+- **BookingCancellation** — owns cancelling: parses the request, removes from storage.
+- **BookingReschedule** — owns rescheduling: parses the request, looks up the old booking, calls the same BookingPolicy against the new time, then removes-and-adds booking.
+- **BookingQuery** — owns listBookings: reads and formats, no mutation.
+
+All four share one InMemoryStore (storage only) and one BookingPolicy (rules) as collaborators. And rules live in BookingPolicy, injected into whichever feature needs to check them.
+
+Each feature module is a distinct, explicit place responsible for deciding when to call it.
+
+**One tradeoff.** 
+
+This split doesn't fix the **missing Booking abstraction** — it spreads it further. Today, only RequestHandler has to assemble the five loose fields (room, date, start, end, user) to call InMemoryStore. After splitting into four feature classes, each of them independently receives and threads through the same five loose parameters to reach the same InMemoryStore. If a Booking type is introduced later, the change now touches four classes instead of one.
 
 ### Alternative B
 
 **The decomposition.**
 
+**RoomDaySchedule** — one instance per (room, date), owns the actual list of bookings for that slot and enforces the no-double-booking invariant locally: create, cancel, and reschedule are all just method calls on this one object, so none of them can bypass the check.
+**ScheduleDirectory** — owns looking up or creating the right RoomDaySchedule for a given (room, date) pair — replaces InMemoryStore's string-concatenated keys with a real lookup on structured values.
+**RequestHandler** — shrinks to parsing/formatting only: turn strings into room/date/start/end/user, hand off to ScheduleDirectory to find the right schedule, call its method, format the result.
+
+Rules live inside RoomDaySchedule itself — it is structurally impossible to mutate one into a double-booked state, because create/cancel/reschedule all fall through the same guarded door.
+
 **One tradeoff.**
+
+Because everything is indexed by (room, date), any query that cuts across dates or across a single user's bookings requires scanning every RoomDaySchedule instance instead of asking one place. The decomposition optimizes for "is this room free right now" at the cost of "what has this user booked."
 
 ### Preference
 
-Which one, and under what conditions? Say what the choice depends on, and what would
-make you pick the other one instead.
+I'd pick Alternative B. The choice depends on two things: what queries the system actually needs today, and how badly it needs the no-double-booking invariant to hold by construction rather than by convention.
+
+On the first point: RequestHandler.listBookings is the only read operation this system has, and it's already (room, date) shaped — there is no "list a user's bookings" or "list bookings across a date range" anywhere in the codebase. So Alternative B's cost — cross-date and cross-user queries being expensive — isn't a cost RoomReserve is actually paying today. I'd be choosing B's weakness in a dimension the system doesn't currently use.
+
+On the second point: the real bugs we found earlier (rescheduleBooking silently dropping addSlot's failure) exist precisely because rule-checking is something **each RequestHandler method has to remember to do**. Alternative A keeps that same shape — BookingReschedule "calls BookingPolicy" only because its description says it should, which is exactly the kind of convention that already failed once in this codebase. Alternative B closes that gap structurally: there's only one door into RoomDaySchedule, so a future BookingReschedule-style class literally **cannot skip the check** the way the current one does.
